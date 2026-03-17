@@ -11,10 +11,10 @@
 // @license         MIT
 // @namespace       https://github.com/victornpb/deleteDiscordMessages
 // @icon            https://victornpb.github.io/undiscord/images/icon128.png
-// @downloadURL     https://raw.githubusercontent.com/victornpb/undiscord/master/deleteDiscordMessages.user.js
 // @contributionURL https://www.buymeacoffee.com/vitim
 // @grant           none
 // @attribution     Original project (https://github.com/victornpb/undiscord)
+// @downloadURL https://github.com/akzov/undiscord/raw/refs/heads/master/deleteDiscordMessages.user.js
 // ==/UserScript==
 (function () {
 	'use strict';
@@ -128,7 +128,7 @@
 [name^="grab-"] { position: absolute; --size: 6px; --corner-size: 16px; --offset: -1px; z-index: 9; }
 [name^="grab-"]:hover{ background: rgba(128,128,128,0.1); }
 [name="grab-t"] { top: 0px; left: var(--corner-size); right: var(--corner-size); height: var(--size); margin-top: var(--offset); cursor: ns-resize; }
-[name="grab-r"] { top: var(--corner-size); bottom: var(--corner-size); right: 0px; width: var(--size); margin-right: var(--offset); 
+[name="grab-r"] { top: var(--corner-size); bottom: var(--corner-size); right: 0px; width: var(--size); margin-right: var(--offset);
   cursor: ew-resize; }
 [name="grab-b"] { bottom: 0px; left: var(--corner-size); right: var(--corner-size); height: var(--size); margin-bottom: var(--offset); cursor: ns-resize; }
 [name="grab-l"] { top: var(--corner-size); bottom: var(--corner-size); left: 0px; width: var(--size); margin-left: var(--offset); cursor: ew-resize; }
@@ -588,6 +588,12 @@
 	        log.verb('There\'s nothing we can delete on this page, checking next page...');
 	        log.verb(`Skipped ${this.state._skippedMessages.length} out of ${this.state._seachResponse.messages.length} in this page.`, `(Offset was ${oldOffset}, ajusted to ${this.state.offset})`);
 	      }
+	      else if (this.state.grandTotal > (this.state.delCount + this.state.failCount) && this.state.iterations < 3 + Math.ceil(this.state.grandTotal / 25)) {
+	        // Discord search index may be stale after deletions, returning empty pages prematurely.
+	        // Retry with a longer delay to give the index time to update.
+	        log.warn('Got an empty page but there should be more messages. Retrying after a longer delay...');
+	        await wait(this.options.searchDelay * 2);
+	      }
 	      else {
 	        log.verb('Ended because API returned an empty page.');
 	        log.verb('[End state]', this.state);
@@ -679,7 +685,7 @@
 	    // not indexed yet
 	    if (resp.status === 202) {
 	      let w = (await resp.json()).retry_after * 1000;
-	      w = w || this.stats.searchDelay; // Fix retry_after 0
+	      w = w || this.options.searchDelay; // Fix retry_after 0
 	      this.stats.throttledCount++;
 	      this.stats.throttledTotalTime += w;
 	      log.warn(`This channel isn't indexed yet. Waiting ${w}ms for discord to index it...`);
@@ -691,12 +697,12 @@
 	      // searching messages too fast
 	      if (resp.status === 429) {
 	        let w = (await resp.json()).retry_after * 1000;
-	        w = w || this.stats.searchDelay; // Fix retry_after 0
+	        w = w || this.options.searchDelay; // Fix retry_after 0
 
 	        this.stats.throttledCount++;
 	        this.stats.throttledTotalTime += w;
-	        this.stats.searchDelay += w; // increase delay
-	        w = this.stats.searchDelay;
+	        this.options.searchDelay += w; // increase delay
+	        w = this.options.searchDelay;
 	        log.warn(`Being rate limited by the API for ${w}ms! Increasing search delay...`);
 	        this.printStats();
 	        log.verb(`Cooling down for ${w * 2}ms before retrying...`);
@@ -724,7 +730,7 @@
 	    if (total > this.state.grandTotal) this.state.grandTotal = total;
 
 	    // search returns messages near the the actual message, only get the messages we searched for.
-	    const discoveredMessages = data.messages.map(convo => convo.find(message => message.hit === true));
+	    const discoveredMessages = data.messages.map(convo => convo.find(message => message.hit === true)).filter(Boolean);
 
 	    // we can only delete some types of messages, system messages are not deletable.
 	    let messagesToDelete = discoveredMessages;
@@ -806,7 +812,13 @@
 	    if (!resp.ok) {
 	      if (resp.status === 429) {
 	        // deleting messages too fast
-	        const w = (await resp.json()).retry_after * 1000;
+	        let w;
+	        try {
+	          w = (await resp.json()).retry_after * 1000;
+	        } catch {
+	          w = this.options.deleteDelay * 2 || 2000;
+	        }
+	        w = w || this.options.deleteDelay || 1000;
 	        this.stats.throttledCount++;
 	        this.stats.throttledTotalTime += w;
 	        this.options.deleteDelay = w; // increase delay
@@ -835,8 +847,10 @@
 	          log.verb('Related object:', redact(JSON.stringify(message)));
 	          this.state.failCount++;
 	          return 'FAILED';
-	        } catch (e) {
+	        } catch {
 	          log.error(`Fail to parse JSON. API responded with status ${resp.status}!`, body);
+	          this.state.failCount++;
+	          return 'FAILED';
 	        }
 	      }
 	    }
@@ -899,7 +913,6 @@
 	      createHandlers: true,
 	    }, options);
 	    Object.assign(this, options);
-	    options = undefined;
 
 	    elm.style.position = 'fixed';
 
@@ -929,7 +942,6 @@
 	class Draggable {
 	  constructor(targetElm, handleElm, op, options) {
 	    Object.assign(this, options);
-	    options = undefined;
 
 	    this._targetElm = targetElm;
 	    this._handleElm = handleElm;
@@ -1030,7 +1042,7 @@
 	      operation(x, y);
 	    }
 
-	    function dragEndHandler(e) {
+	    function dragEndHandler() {
 	      if (this.useMouseEvents) {
 	        document.removeEventListener('mousemove', this._dragMoveHandler);
 	        document.removeEventListener('mouseup', this._dragEndHandler);
@@ -1147,7 +1159,7 @@ body.undiscord-pick-message.after [id^="message-content-"]:hover::after {
 	    insertCss(messagePickerCss);
 	  },
 	  grab(auxiliary) {
-	    return new Promise((resolve, reject) => {
+	    return new Promise((resolve) => {
 	      document.body.classList.add('undiscord-pick-message');
 	      if (auxiliary) document.body.classList.add(auxiliary);
 	      function clickHandler(e) {
@@ -1161,7 +1173,7 @@ body.undiscord-pick-message.after [id^="message-content-"]:hover::after {
 	          document.removeEventListener('click', clickHandler);
 	          try {
 	            resolve(message.id.match(/message-content-(\d+)/)[1]);
-	          } catch (e) {
+	          } catch {
 	            resolve(null);
 	          }
 	        }
@@ -1259,14 +1271,15 @@ body.undiscord-pick-message.after [id^="message-content-"]:hover::after {
 	  ui.undiscordBtn = createElm(buttonHtml);
 	  ui.undiscordBtn.onclick = toggleWindow;
 	  function mountBtn() {
-	    const toolbar = document.querySelector('#app-mount [class*="-toolbar"]');
+	    const toolbar = document.querySelector('section[aria-label="Channel header"] [class^="toolbar_"]') ||
+                document.querySelector('[class^="toolbar-"]');
 	    if (toolbar) toolbar.appendChild(ui.undiscordBtn);
 	  }
 	  mountBtn();
 	  // watch for changes and re-mount button if necessary
 	  const discordElm = document.querySelector('#app-mount');
 	  let observerThrottle = null;
-	  const observer = new MutationObserver((_mutationsList, _observer) => {
+	  const observer = new MutationObserver(() => {
 	    if (observerThrottle) return;
 	    observerThrottle = setTimeout(() => {
 	      observerThrottle = null;
@@ -1465,14 +1478,14 @@ body.undiscord-pick-message.after [id^="message-content-"]:hover::after {
 	  //advanced
 	  const searchDelay = parseInt($('input#searchDelay').value.trim());
 	  const deleteDelay = parseInt($('input#deleteDelay').value.trim());
-	 
+
 	  // token
 	  const authToken = $('input#token').value.trim() || fillToken();
 	  if (!authToken) return; // get token already logs an error.
-	  
+
 	  // validate input
 	  if (!guildId) return log.error('You must fill the "Server ID" field!');
-	 
+
 	  // clear logArea
 	  ui.logArea.innerHTML = '';
 
