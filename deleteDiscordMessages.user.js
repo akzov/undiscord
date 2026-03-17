@@ -14,8 +14,7 @@
 // @contributionURL https://www.buymeacoffee.com/vitim
 // @grant           none
 // @attribution     Original project (https://github.com/victornpb/undiscord)
-// @downloadURL https://update.greasyfork.org/scripts/406540/Undiscord.user.js
-// @updateURL https://update.greasyfork.org/scripts/406540/Undiscord.meta.js
+// @downloadURL https://github.com/akzov/undiscord/raw/refs/heads/master/deleteDiscordMessages.user.js
 // ==/UserScript==
 (function () {
 	'use strict';
